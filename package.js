@@ -1,6 +1,7 @@
 Package.describe({
   summary: "Azure blob upload",
   version: "1.0.0",
+  git:"https://github.com/jamesfebin/azure-blob-upload"
 });
 
 Npm.depends({  

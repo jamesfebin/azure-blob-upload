@@ -299,8 +299,6 @@ util.inherits(ReadableStreamBuffer, stream.Stream);
   		return fileName.replace(/\//g,'').replace(/\.\.+/g,'.');
   }
 
-    blobService = azure.createBlobService("boutstorage", "JtCAsptXFWdtys9/onQul7R/WP51c2JAxyFDB9/Ualn6wESJ0bbCQeeJWyDInIEUZCNXWJ+sQEweexOm86j6WA==").withFilter(retryOperations);
-
   _.extend(AzureFile.prototype, {
     save: function (dirPath, options) {
 
