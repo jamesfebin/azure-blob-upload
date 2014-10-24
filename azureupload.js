@@ -11,7 +11,8 @@ AzureFile = function (options) {
   this.end = defaultZero(options.end);
   this.bytesRead = defaultZero(options.bytesRead);
   this.bytesUploaded = defaultZero(options.bytesUploaded);
-
+  this.blockCount = options.blockCount || 0;
+  this.blockArray = options.blockArray || [];
   this._id = options._id || Meteor.uuid();
 };
 
@@ -25,7 +26,9 @@ AzureFile.fromJSONValue = function (value) {
     end: value.end,
     bytesRead:value.bytesRead,
     bytesUploaded:value.bytesUploaded,
-    _id:value._id
+    _id:value._id,
+    blockCount:value.blockCount,
+    blockArray:value.blockArray
   });
 };
 
@@ -50,7 +53,9 @@ AzureFile.prototype = {
       end: this.end,
       bytesRead:this.bytesRead,
       bytesUploaded:this.bytesUploaded,
-      _id:this._id
+      _id:this._id,
+      blockCount:this.blockCount,
+      blockArray:this.blockArray
     });
   },
 
@@ -64,7 +69,10 @@ AzureFile.prototype = {
       end: this.end,
       bytesRead:this.bytesRead,
       bytesUploaded:this.bytesUploaded,
-      _id:this._id
+      _id:this._id,
+      blockId:this.blockId,
+      blockCount:this.blockCount,
+      blockArray:this.blockArray
     };
   }
 };
@@ -82,7 +90,7 @@ if (Meteor.isClient) {
 
       var reader = new FileReader;
       var self = this;
-      var chunkSize = options.size || 1024 * 1024 *2;
+      var chunkSize = 512 * 512; 
 
       callback = callback || function () {};
 
@@ -108,10 +116,9 @@ if (Meteor.isClient) {
 
       if ((this.end - this.start) > 0)
       {
-      	var blob = file.slice(this.start , self.end);
+      	var blob = file.slice(self.start , self.end);
       	reader.readAsArrayBuffer(blob);
       }
-      reader.readAsArrayBuffer(file);
 
       return this;
     },
@@ -122,6 +129,8 @@ if (Meteor.isClient) {
     	this.end = 0;
     	this.bytesRead = 0;
     	this.bytesUploaded = 0;
+    	this.blockCount = 0;
+    	this.blockArray = [];
     },
     upload: function(file,method,options,callback){
     	var self = this;
@@ -136,6 +145,7 @@ if (Meteor.isClient) {
     		callback = options;
     		options = {};
     	}
+    	 Session.set("fileProgress",0);
 
 
     	options = options || {};
@@ -147,12 +157,14 @@ if (Meteor.isClient) {
     		if(self.bytesUploaded < self.size){
     			self.read(file, options, function(err,res)
     			{
-    				if (err && callback)
-    					callback(err);
-    				else if (err)
-    					throw err;
+    				if (err){
+    					self.rewind();
+    					callback && callback(err);
+    				}
+    					
     				else
     				{
+    					self.blockArray.push(btoa("BlockNo" + self.blockCount));
     				Meteor.apply(
     					method,
     					[self].concat(options.params || []),
@@ -161,12 +173,16 @@ if (Meteor.isClient) {
     					},
     					function(err)
     					{
-    						if(err && callback)
-    							callback(err);
-    						else if (err)
-    							throw err;
+    						
+    						if (err){
+    							self.rewind();
+    							callback && callback(err)
+    						}
     						else {
     							self.bytesUploaded += self.data.length;
+    							 
+    							Session.set('fileProgress',((self.bytesUploaded/self.size)*100));
+    							self.blockCount ++;
     							readNext();
     						}
 
@@ -201,13 +217,12 @@ if (Meteor.isClient) {
   });
 }
 if (Meteor.isServer) {
-  var fs = Npm.require('fs');
-  var path = Npm.require('path');
-  var azure = Npm.require('azure-storage');
-  var stream = Npm.require('stream');
-  var util = Npm.require('util');
-// use Node.js Writable, otherwise load polyfill
-
+  var fs = Npm.require('fs'),
+  path = Npm.require('path'),
+  azure = Npm.require('azure-storage'),
+  stream = Npm.require('stream'),
+  util = Npm.require('util');
+  
 
 var ReadableStreamBuffer = function(fileBuffer) {
     var that = this;
@@ -278,11 +293,18 @@ util.inherits(ReadableStreamBuffer, stream.Stream);
 
 
   function sanatize(fileName){
-  	return fileName.replace(/\//g,'').replace(/\.\.+/g,'.')
+  	if (fileName === void 0)
+       return;
+    else
+  		return fileName.replace(/\//g,'').replace(/\.\.+/g,'.');
   }
+
+    blobService = azure.createBlobService("boutstorage", "JtCAsptXFWdtys9/onQul7R/WP51c2JAxyFDB9/Ualn6wESJ0bbCQeeJWyDInIEUZCNXWJ+sQEweexOm86j6WA==").withFilter(retryOperations);
 
   _.extend(AzureFile.prototype, {
     save: function (dirPath, options) {
+
+
       var filepath = path.join(dirPath, sanatize(this.name));
       var buffer = new Buffer(this.data);
       var mode = this.start == 0 ? 'w' : 'a';
@@ -290,28 +312,56 @@ util.inherits(ReadableStreamBuffer, stream.Stream);
       fs.writeSync(fd, buffer, 0, buffer.length, this.start);
       fs.closeSync(fd);
   },
-    azureUpload:function(fileName,accountName,key,container) {
+    azureUpload:function(fileName,accountName,key,container,callback) {
+
+      var buffer = new Buffer(this.data);
+      retryOperations = new azure.ExponentialRetryPolicyFilter();
+	  blobService = azure.createBlobService(accountName, key).withFilter(retryOperations);
+	  var blockId = this.blockArray[this.blockArray.length-1];
+	  var stream = new ReadableStreamBuffer(buffer);
+	  var self = this;
+	  Future = Npm.require('fibers/future');
+      var myFuture = new Future;
 
 
-    	retryOperations = new azure.ExponentialRetryPolicyFilter();
-
-    	blobService = azure.createBlobService(accountName, key).withFilter(retryOperations);
-        var buffer = new Buffer(this.data);
-   
-
-    	
-        blobService.createBlockBlobFromStream(container,fileName,new ReadableStreamBuffer(buffer),buffer.length,function(err,response)
+      blobService.createBlockFromStream(blockId,container,fileName,stream,stream.size(),function(err,response)
         	{
 
-        		if(err && callback)
-        			callback(err);
-        		else if (err)
-        			throw err
-        		
-        		else
-        			console.log('Data uploaded to azure succesfully ');
+        		if(err)
+        		{
+        			myFuture.return();
+        		}
+        		else if (response)
+        		{     
+        			
+        			
+        		 if (self.bytesUploaded+self.data.length >= self.size)
+      				{
+				      	 blobService.commitBlocks(container, fileName, {LatestBlocks: self.blockArray}, function(error, result){
+				                if(error){
+				                 myFuture.return();
+
+				                } else {
+				                    myFuture.return({url:"https://"+accountName+".blob.core.windows.net/"+container+"/"+fileName});
+				                }
+				            });
+				
+
+
+     			    }
+     			    else
+     			    {
+     			    	 myFuture.return();
+     			    }
+     			    
+
+        		}
 
         	});
+
+      	return myFuture.wait();
+        		
+
 
   	  }
       

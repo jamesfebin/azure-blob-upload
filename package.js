@@ -1,11 +1,16 @@
 Package.describe({
-  summary: "Azure blob image upload",
+  summary: "Azure blob upload",
   version: "1.0.0",
 });
 
+Npm.depends({  
+  'azure-storage': '0.3.3'
+});
+
+
 Package.onUse(function(api) {
   api.versionsFrom('METEOR@0.9.3.1');
-  api.use(['ejson','underscore','coffeescript'],['client','server']);
+  api.use(['ejson','underscore'],['client','server']);
   api.addFiles('azureupload.js');
   api.export(['AzureFile'],['client','server']);
 
